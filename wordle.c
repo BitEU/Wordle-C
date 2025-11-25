@@ -6,6 +6,8 @@
 #include <string.h>
 //Used to seed the rng for random games
 #include <time.h>
+//Embedded wordlist with bloom filter
+#include "wordlist.h"
 
 //Length of a word.
 //Note: You cannot change this without changing the word list too.
@@ -17,6 +19,9 @@
 #define ALPHA_SIZE 27
 //If set, the word and a few stats are printed before the game starts
 //#define DEBUG
+
+// Use embedded wordlist instead of files
+#define USE_EMBEDDED_WORDLIST
 
 //Very cheap error termination script
 #define err(x) fprintf(stderr, EOL "[%s:%i] Fatal error: %s" EOL, __FILE__, __LINE__, x);abort();
@@ -34,8 +39,14 @@
 #define false (0)
 #define true (!false)
 
+#ifndef USE_EMBEDDED_WORDLIST
 //Files for lists that contain all words and solutions
 FILE * fpAll,  * fpSol;
+//Memory cache:
+//0-25 File position in the complete list with words that start with the given letter a-z
+//26: Number of words in the solution list
+long memcache[ALPHA_SIZE];
+#endif
 //Number of words in the solution list
 long wordCount = 0;
 //Selected word from solution list
@@ -43,10 +54,6 @@ char word[WORD_LENGTH + 1] = {0};
 //Possible characters (used to show unused characters)
 //The size specifier is necessary or its value will be readonly
 char alpha[ALPHA_SIZE] = "abcdefghijklmnopqrstuvwxyz";
-//Memory cache:
-//0-25 File position in the complete list with words that start with the given letter a-z
-//26: Number of words in the solution list
-long memcache[ALPHA_SIZE];
 
 //Reads solution list and picks a random word
 long setup(void);
@@ -75,6 +82,10 @@ void help(void);
 int main() {
 	int gameId;
 	setbuf(stdout, NULL);
+#ifdef USE_EMBEDDED_WORDLIST
+	bloom_init();
+	wordCount = solution_count;
+#else
 	//Note: This will search for the file in the current directory
 	fpAll = fopen("LISTS\\ALL.TXT", "r");
 	fpSol = fopen("LISTS\\SOLUTION.TXT", "r");
@@ -86,6 +97,8 @@ int main() {
 	#else
 	setup();
 	#endif
+#endif
+	srand((int)time(0));
 	gameId = menu();
 	if (gameId >= 0) {
 		pickWord(word, gameId);
@@ -97,8 +110,10 @@ int main() {
 	}
 	printf("Running game #%i" EOL, gameId + 1);
 	gameLoop();
+#ifndef USE_EMBEDDED_WORDLIST
 	fclose(fpAll);
 	fclose(fpSol);
+#endif
 	return EXIT_SUCCESS;
 }
 
@@ -273,12 +288,15 @@ int toLower(char * str) {
 }
 
 int hasWord(const char * word) {
-	//A bit longer to also contain the line terminator
-	char buffer[WORD_LENGTH + 4];
 	//Don't bother if the argument is invalid
 	if (word == NULL || strlen(word) != WORD_LENGTH || !isWord(word)) {
 		return false;
 	}
+#ifdef USE_EMBEDDED_WORDLIST
+	return bloom_check(word);
+#else
+	//A bit longer to also contain the line terminator
+	char buffer[WORD_LENGTH + 4];
 	fseek(fpAll, memcache[word[0]-'a'], SEEK_SET);
 	//Stop comparing once we are beyond the current letter
 	while (fgets(buffer, WORD_LENGTH + 4, fpAll) != NULL && buffer[0]==word[0]) {
@@ -288,6 +306,7 @@ int hasWord(const char * word) {
 		}
 	}
 	return false;
+#endif
 }
 
 bool isWord(const char* word){
@@ -303,18 +322,19 @@ bool isWord(const char* word){
 	return false;
 }
 
+#ifndef USE_EMBEDDED_WORDLIST
 long setup() {
 	FILE* cache;
 	char currentChar;
 	char currentWord[WORD_LENGTH + 1];
 	bool success = false;
-	
+
 	//Don't bother if setup was already performed
 	if (wordCount > 0) {
 		return wordCount;
 	}
 	srand((int)time(0));
-	
+
 	if ((cache = fopen("LISTS\\CACHE.BIN","rb")) != NULL) {
 		printf("Reading cache... ");
 	    success = fread(memcache, sizeof(long), ALPHA_SIZE, cache) == ALPHA_SIZE;
@@ -327,7 +347,7 @@ long setup() {
 			puts(" [FAIL]");
 		}
 	}
-	
+
 	printf("Loading word list...");
 	fseek(fpSol, 0, SEEK_SET);
 	while (fgets(currentWord, WORD_LENGTH + 1, fpSol) != NULL) {
@@ -366,8 +386,12 @@ long setup() {
 
 	return wordCount;
 }
+#endif
 
 int pickWord(char * word, int index) {
+#ifdef USE_EMBEDDED_WORDLIST
+	get_solution(index, word);
+#else
 	int i = 0;
 	fseek(fpSol, 0, SEEK_SET);
 	while (i <= index && fgets(word, WORD_LENGTH + 1, fpSol) != NULL) {
@@ -375,5 +399,6 @@ int pickWord(char * word, int index) {
 			++i;
 		}
 	}
+#endif
 	return index;
 }
